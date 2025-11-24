@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  edm-ecg:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: edm-ecg:latest
+    container_name: ecg-training
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./:/workspace
+    working_dir: /workspace
+    shm_size: 8gb
+    stdin_open: true
+    tty: true
+    command: bash
+
+  # テスト用（ダミーデータ生成）
+  test:
+    extends: edm-ecg
+    container_name: ecg-test
+    command: >
+      bash -c "
+        python preprocess_ecg_data.py create_dummy --output_dir datasets/ecg_test --num_samples 100 &&
+        python preprocess_ecg_data.py verify --dataset_dir datasets/ecg_test &&
+        python train.py --outdir=training-runs --data=datasets/ecg_test --cond=0 --arch=ddpmpp --duration=1 --batch=32 --batch-gpu=32 --tick=1 --snap=5 --seed=42
+      "
+
+  # 本格学習用（8GPU）
+  train:
+    extends: edm-ecg
+    container_name: ecg-train
+    command: >
+      torchrun --standalone --nproc_per_node=8 train.py
+        --outdir=training-runs
+        --data=datasets/ecg_real
+        --cond=0
+        --arch=ddpmpp
+        --precond=edm
+        --duration=200
+        --batch=512
+        --batch-gpu=64
+        --lr=0.0001
+        --ema=0.5
+        --dropout=0.1
+        --augment=0.0
+        --tick=50
+        --snap=50
+        --seed=42
